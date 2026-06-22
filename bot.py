@@ -10,16 +10,21 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- CONFIG ---
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-SUMMARY_CHAT_ID = os.environ["SUMMARY_CHAT_ID"]
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+SUMMARY_CHAT_ID = os.environ.get("SUMMARY_CHAT_ID", "")
 
 SOURCE_GROUPS = {
-    "NLD CVD SALES GROUP": os.environ["SALES_CHAT_ID"],
-    "Sent to Goldsmith": os.environ["GOLDSMITH_CHAT_ID"],
-    "NLD EXP": os.environ["EXP_CHAT_ID"],
-    "REFUNDS NLD": os.environ["REFUNDS_CHAT_ID"],
+    "NLD CVD SALES GROUP": os.environ.get("SALES_CHAT_ID", ""),
+    "Sent to Goldsmith": os.environ.get("GOLDSMITH_CHAT_ID", ""),
+    "NLD EXP": os.environ.get("EXP_CHAT_ID", ""),
+    "REFUNDS NLD": os.environ.get("REFUNDS_CHAT_ID", ""),
 }
+
+if not TELEGRAM_TOKEN:
+    raise ValueError("TELEGRAM_TOKEN is not set!")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY is not set!")
 
 TIMEZONE = pytz.timezone("Asia/Phnom_Penh")
 SUMMARY_HOUR = 8   # 8:00 AM every day
