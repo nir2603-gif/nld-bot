@@ -107,13 +107,17 @@ Messages:
 
 Respond in clear English with bullet points. Be concise and business-focused."""
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
     
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(url, json={
             "contents": [{"parts": [{"text": prompt}]}]
         })
         result = r.json()
+        logger.info(f"Gemini response: {result}")
+        if "candidates" not in result:
+            error_msg = result.get("error", {}).get("message", str(result))
+            return f"Gemini API error: {error_msg}"
         return result["candidates"][0]["content"]["parts"][0]["text"]
 
 # --- DAILY SUMMARY ---
