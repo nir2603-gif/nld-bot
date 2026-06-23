@@ -27,7 +27,7 @@ if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY is not set!")
 
 TIMEZONE = pytz.timezone("Asia/Phnom_Penh")
-SUMMARY_HOUR = 8   # 8:00 AM every day
+SUMMARY_HOUR = 8
 SUMMARY_MINUTE = 0
 
 # --- TELEGRAM ---
@@ -42,7 +42,6 @@ async def get_updates(offset=None):
 
 async def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    # Split long messages
     max_length = 4000
     chunks = [text[i:i+max_length] for i in range(0, len(text), max_length)]
     async with httpx.AsyncClient(timeout=30) as client:
@@ -53,41 +52,13 @@ async def send_message(chat_id, text):
                 "parse_mode": "Markdown"
             })
 
-# --- MESSAGE STORAGE (in memory) ---
-messages_store = {}  # { group_name: [ {date, from, text} ] }
-
-async def poll_messages():
-    """Continuously poll all groups and store messages"""
-    offset = None
-    while True:
-        try:
-            data = await get_updates(offset)
-            if data.get("ok"):
-                for update in data.get("result", []):
-                    offset = update["update_id"] + 1
-                    msg = update.get("message") or update.get("channel_post")
-                    if msg and msg.get("text"):
-                        chat_id = str(msg["chat"]["id"])
-                        # Find which group this belongs to
-                        for group_name, gid in SOURCE_GROUPS.items():
-                            if chat_id == gid:
-                                if group_name not in messages_store:
-                                    messages_store[group_name] = []
-                                sender = msg.get("from", {}).get("first_name", "Unknown")
-                                messages_store[group_name].append({
-                                    "date": datetime.fromtimestamp(msg["date"], tz=TIMEZONE),
-                                    "from": sender,
-                                    "text": msg["text"]
-                                })
-                                break
-        except Exception as e:
-            logger.error(f"Polling error: {e}")
-        await asyncio.sleep(2)
+# --- MESSAGE STORAGE ---
+messages_store = {}
 
 # --- GEMINI ---
 async def summarize_with_gemini(group_name, messages):
     if not messages:
-        return f"*{group_name}*\nNo messages yesterday."
+        return f"No messages yesterday."
 
     messages_text = "\n".join([
         f"[{m['from']}]: {m['text']}" for m in messages
@@ -114,7 +85,7 @@ Respond in clear English with bullet points. Be concise and business-focused."""
             "contents": [{"parts": [{"text": prompt}]}]
         })
         result = r.json()
-        logger.info(f"Gemini response: {result}")
+        logger.info(f"Gemini response for {group_name}: {result}")
         if "candidates" not in result:
             error_msg = result.get("error", {}).get("message", str(result))
             return f"Gemini API error: {error_msg}"
@@ -132,7 +103,6 @@ async def send_daily_summary():
     summary_parts.append(f"📅 {yesterday_date.strftime('%A, %B %d, %Y')}\n")
 
     for group_name in SOURCE_GROUPS.keys():
-        # Filter only yesterday's messages
         all_msgs = messages_store.get(group_name, [])
         yesterday_msgs = [
             m for m in all_msgs
@@ -155,7 +125,6 @@ async def send_daily_summary():
     await send_message(SUMMARY_CHAT_ID, full_summary)
     logger.info("Daily summary sent!")
 
-    # Clear yesterday's messages from store
     for group_name in SOURCE_GROUPS.keys():
         if group_name in messages_store:
             messages_store[group_name] = [
@@ -163,14 +132,48 @@ async def send_daily_summary():
                 if m["date"].date() != yesterday_date
             ]
 
+# --- POLL MESSAGES ---
+async def poll_messages():
+    offset = None
+    while True:
+        try:
+            data = await get_updates(offset)
+            if data.get("ok"):
+                for update in data.get("result", []):
+                    offset = update["update_id"] + 1
+                    msg = update.get("message") or update.get("channel_post")
+                    if msg and msg.get("text"):
+                        chat_id = str(msg["chat"]["id"])
+                        text = msg.get("text", "")
+
+                        # Handle /summary command
+                        if text.strip() == "/summary" and chat_id == SUMMARY_CHAT_ID:
+                            await send_message(chat_id, "⏳ Generating summary now, please wait...")
+                            await send_daily_summary()
+                            continue
+
+                        # Store messages from source groups
+                        for group_name, gid in SOURCE_GROUPS.items():
+                            if chat_id == gid:
+                                if group_name not in messages_store:
+                                    messages_store[group_name] = []
+                                sender = msg.get("from", {}).get("first_name", "Unknown")
+                                messages_store[group_name].append({
+                                    "date": datetime.fromtimestamp(msg["date"], tz=TIMEZONE),
+                                    "from": sender,
+                                    "text": text
+                                })
+                                break
+        except Exception as e:
+            logger.error(f"Polling error: {e}")
+        await asyncio.sleep(2)
+
 # --- MAIN ---
 async def main():
     logger.info("NLD Bot starting...")
 
-    # Send startup message
-    await send_message(SUMMARY_CHAT_ID, "✅ *NLD Bot is online!*\nI will send daily summaries every morning at 8:00 AM.")
+    await send_message(SUMMARY_CHAT_ID, "✅ *NLD Bot is online!*\nI will send daily summaries every morning at 8:00 AM.\nSend /summary anytime to get yesterday's report.")
 
-    # Schedule daily summary
     scheduler = AsyncIOScheduler(timezone=TIMEZONE)
     scheduler.add_job(
         send_daily_summary,
@@ -180,7 +183,6 @@ async def main():
     )
     scheduler.start()
 
-    # Start polling
     await poll_messages()
 
 if __name__ == "__main__":
