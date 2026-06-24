@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import json
 from datetime import datetime, timedelta
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -29,6 +30,38 @@ if not GEMINI_API_KEY:
 TIMEZONE = pytz.timezone("Asia/Phnom_Penh")
 SUMMARY_HOUR = 8
 SUMMARY_MINUTE = 0
+MESSAGES_FILE = "/tmp/messages_store.json"
+
+# --- SAVE/LOAD MESSAGES ---
+def load_messages():
+    try:
+        if os.path.exists(MESSAGES_FILE):
+            with open(MESSAGES_FILE, "r") as f:
+                data = json.load(f)
+                # Convert date strings back to datetime objects
+                for group in data:
+                    for msg in data[group]:
+                        msg["date"] = datetime.fromisoformat(msg["date"])
+                return data
+    except Exception as e:
+        logger.error(f"Error loading messages: {e}")
+    return {}
+
+def save_messages():
+    try:
+        data = {}
+        for group, msgs in messages_store.items():
+            data[group] = []
+            for msg in msgs:
+                data[group].append({
+                    "date": msg["date"].isoformat(),
+                    "from": msg["from"],
+                    "text": msg["text"]
+                })
+        with open(MESSAGES_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error(f"Error saving messages: {e}")
 
 # --- TELEGRAM ---
 async def get_updates(offset=None):
@@ -53,12 +86,12 @@ async def send_message(chat_id, text):
             })
 
 # --- MESSAGE STORAGE ---
-messages_store = {}
+messages_store = load_messages()
 
 # --- GEMINI ---
 async def summarize_with_gemini(group_name, messages):
     if not messages:
-        return f"No messages yesterday."
+        return "No messages yesterday."
 
     messages_text = "\n".join([
         f"[{m['from']}]: {m['text']}" for m in messages
@@ -112,7 +145,7 @@ async def send_daily_summary():
         try:
             summary = await summarize_with_gemini(group_name, yesterday_msgs)
         except Exception as e:
-            summary = f"Error generating summary: {e}"
+            summary = f"Error: {e}"
 
         summary_parts.append(f"━━━━━━━━━━━━━━━━━━━━")
         summary_parts.append(f"📁 *{group_name}*")
@@ -125,12 +158,14 @@ async def send_daily_summary():
     await send_message(SUMMARY_CHAT_ID, full_summary)
     logger.info("Daily summary sent!")
 
+    # Clear yesterday's messages
     for group_name in SOURCE_GROUPS.keys():
         if group_name in messages_store:
             messages_store[group_name] = [
                 m for m in messages_store[group_name]
                 if m["date"].date() != yesterday_date
             ]
+    save_messages()
 
 # --- POLL MESSAGES ---
 async def poll_messages():
@@ -147,7 +182,7 @@ async def poll_messages():
                         text = msg.get("text", "")
 
                         # Handle /summary command
-                        if text.strip() == "/summary" and chat_id == SUMMARY_CHAT_ID:
+                        if text.strip() == "/summary":
                             await send_message(chat_id, "⏳ Generating summary now, please wait...")
                             await send_daily_summary()
                             continue
@@ -163,6 +198,7 @@ async def poll_messages():
                                     "from": sender,
                                     "text": text
                                 })
+                                save_messages()
                                 break
         except Exception as e:
             logger.error(f"Polling error: {e}")
@@ -171,16 +207,10 @@ async def poll_messages():
 # --- MAIN ---
 async def main():
     logger.info("NLD Bot starting...")
-
-    await send_message(SUMMARY_CHAT_ID, "✅ *NLD Bot is online!*\nI will send daily summaries every morning at 8:00 AM.\nSend /summary anytime to get yesterday's report.")
+    await send_message(SUMMARY_CHAT_ID, "✅ *NLD Bot is online!*\nSend /summary anytime to get yesterday's report.")
 
     scheduler = AsyncIOScheduler(timezone=TIMEZONE)
-    scheduler.add_job(
-        send_daily_summary,
-        "cron",
-        hour=SUMMARY_HOUR,
-        minute=SUMMARY_MINUTE
-    )
+    scheduler.add_job(send_daily_summary, "cron", hour=SUMMARY_HOUR, minute=SUMMARY_MINUTE)
     scheduler.start()
 
     await poll_messages()
